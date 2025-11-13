@@ -1,1 +1,6 @@
 diffedge/
+data/
+outputs/
+pre_weight/
+*/__pycache__/
+*/modules/

@@ -70,5 +70,5 @@ sampler:
   batch_size: 1
   sample_num: 300
   use_ema: True
-  save_folder:
+  save_folder: './results'
   ckpt_path:
