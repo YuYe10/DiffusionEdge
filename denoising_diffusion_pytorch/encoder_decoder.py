@@ -976,9 +976,16 @@ class AutoencoderKL(nn.Module):
         x = x.permute(0, 3, 1, 2).to(memory_format=torch.contiguous_format).float()
         return x
 
-    def training_step(self, inputs, optimizer_idx, global_step):
+    def training_step(self, inputs, ga_ind, global_step):
         # inputs = self.get_input(batch, self.image_key)
         reconstructions, posterior = self(inputs)
+
+        ### modified by AI###
+        # 根据ga_ind决定使用哪个优化器
+        # ga_ind == 0: 训练编码器+解码器 (optimizer_idx = 0)
+        # ga_ind >= 1: 训练判别器 (optimizer_idx = 1)
+        optimizer_idx = 0 if ga_ind == 0 else 1
+        ### modified by AI###
 
         if optimizer_idx == 0:
             # train encoder+decoder+logvar
