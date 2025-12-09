@@ -26,10 +26,29 @@ def load_conf(config_file, conf={}):
             conf[k] = v
     return conf
 def parse_args():
-    parser = argparse.ArgumentParser(description="demo configure")
+    parser = argparse.ArgumentParser(
+        description="DiffusionEdge Demo - Run inference with trained model",
+        epilog="""
+Examples:
+
+  # Using BSDS configuration with trained model
+  python demo.py \\
+      --cfg ./configs/BSDS_sample.yaml \\
+      --input_dir ./data/Multicue_split/MDBD_split3/test/imgs \\
+      --pre_weight ./outputs/disloss/model-20.pt \\
+      --out_dir ./outputs/demo_results
+
+  # Quick start (uses auto-detected weights)
+  python quick_demo_fix.py  # Run this first to get suggested command
+
+NOTE: --pre_weight must be a COMPLETE model checkpoint (not VAE-only).
+If you get "Missing key(s)" error, see DEMO_WEIGHT_ERROR_FIX.md
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--cfg", help="experiment configure file name", type=str, default="./configs/default.yaml")
     parser.add_argument("--input_dir", help='input directory', type=str, required=True)
-    parser.add_argument("--pre_weight", help='path of pretrained weight', type=str, required=True)
+    parser.add_argument("--pre_weight", help='path of pretrained weight (MUST be complete model, not VAE)', type=str, required=True)
     parser.add_argument("--sampling_timesteps", help='sampling timesteps', type=int, default=1)
     parser.add_argument("--out_dir", help='output directory', type=str, required=True)
     parser.add_argument("--bs", help='batch_size for inference', type=int, default=8)
@@ -40,6 +59,19 @@ def parse_args():
 
 def main(args):
     cfg = CfgNode(args.cfg)
+    
+    # Verify weight file exists and is valid
+    pre_weight_path = Path(args.pre_weight)
+    if not pre_weight_path.exists():
+        print(f"ERROR: Pretrained weight file not found: {args.pre_weight}")
+        print()
+        print("To find available weights:")
+        print("  python3 quick_demo_fix.py")
+        print()
+        print("Or list all weights manually:")
+        print("  find ./outputs -name 'model-*.pt' -type f")
+        sys.exit(1)
+    
     torch.manual_seed(42)
     np.random.seed(42)
     # random.seed(seed)
@@ -164,22 +196,83 @@ class Sampler(object):
             self.results_folder.mkdir(exist_ok=True, parents=True)
 
         self.model = self.accelerator.prepare(self.model)
-        data = torch.load(cfg.sampler.ckpt_path, map_location=lambda storage, loc: storage)
+        
+        ckpt_path = cfg.sampler.ckpt_path
+        print(f"Loading checkpoint from: {ckpt_path}")
+        
+        try:
+            data = torch.load(ckpt_path, map_location=lambda storage, loc: storage)
+        except FileNotFoundError:
+            print(f"ERROR: Checkpoint file not found at: {ckpt_path}")
+            print("Please provide a valid checkpoint path using --pre_weight argument")
+            print("Example: python demo.py ... --pre_weight ./checkpoints/model.pt")
+            raise
 
         model = self.accelerator.unwrap_model(self.model)
-        if cfg.sampler.use_ema:
-            sd = data['ema']
-            new_sd = {}
-            for k in sd.keys():
-                if k.startswith("ema_model."):
-                    new_k = k[10:]  # remove ema_model.
-                    new_sd[new_k] = sd[k]
-            sd = new_sd
-            model.load_state_dict(sd)
-        else:
-            model.load_state_dict(data['model'])
-        if 'scale_factor' in data['model']:
-            model.scale_factor = data['model']['scale_factor']
+        
+        # Try to load the checkpoint
+        try:
+            if cfg.sampler.use_ema:
+                if 'ema' not in data:
+                    print(f"WARNING: EMA weights not found in checkpoint. Available keys: {list(data.keys())}")
+                    print("Falling back to 'model' weights...")
+                    sd = data.get('model', data)
+                else:
+                    sd = data['ema']
+                    new_sd = {}
+                    for k in sd.keys():
+                        if k.startswith("ema_model."):
+                            new_k = k[10:]  # remove ema_model.
+                            new_sd[new_k] = sd[k]
+                    sd = new_sd
+            else:
+                if 'model' not in data:
+                    print(f"WARNING: 'model' key not found in checkpoint. Available keys: {list(data.keys())}")
+                    if len(data) == 1:
+                        # Single-key checkpoint, likely just the state dict
+                        sd = list(data.values())[0]
+                        print(f"Using single key '{list(data.keys())[0]}' as model state dict")
+                    else:
+                        sd = data
+                        print("Attempting to use entire checkpoint as state dict...")
+                else:
+                    sd = data['model']
+            
+            # Try loading with strict=True first
+            try:
+                model.load_state_dict(sd, strict=True)
+                print("✓ Checkpoint loaded successfully with strict=True")
+            except RuntimeError as e:
+                error_msg = str(e)
+                if "Missing key" in error_msg or "unexpected key" in error_msg:
+                    print(f"WARNING: State dict mismatch (strict=False will be used)")
+                    print(f"Error details: {error_msg[:200]}...")
+                    
+                    # Try with strict=False
+                    model.load_state_dict(sd, strict=False)
+                    print("✓ Checkpoint loaded with strict=False")
+                    print("Note: Some model weights may not have been loaded or unexpected weights were ignored")
+                else:
+                    raise
+            
+            if 'scale_factor' in data.get('model', {}):
+                model.scale_factor = data['model']['scale_factor']
+                
+        except Exception as e:
+            print(f"ERROR: Failed to load checkpoint: {e}")
+            print()
+            print("Possible causes:")
+            print("1. Wrong checkpoint file - ensure it's a complete model, not a VAE-only checkpoint")
+            print("2. Model architecture mismatch - the checkpoint may be from a different model architecture")
+            print("3. Incompatible PyTorch version - checkpoint was saved with a different PyTorch version")
+            print()
+            print("Checkpoint contents: {}")
+            if isinstance(data, dict):
+                print(f"  Keys in checkpoint: {list(data.keys())}")
+                if 'model' in data:
+                    print(f"  'model' sub-keys (first 5): {list(data['model'].keys())[:5]}")
+            print()
+            raise
 
     def sample(self):
         accelerator = self.accelerator

@@ -14,6 +14,8 @@ import pycuda.driver as cuda
 import pycuda.autoinit     # init pycuda.driver
 import tensorrt as trt
 import torch.nn.functional as F
+from pathlib import Path
+import sys
 
 
 def parse_args():
@@ -23,6 +25,7 @@ def parse_args():
     parser.add_argument("--out_dir", help='output directory', type=str, required=True)
     parser.add_argument("--bs", help='batch_size for inference', type=int, default=16)
     parser.add_argument("--crop_size", help='crop size for inference', type=int, default=256)
+    parser.add_argument("--force_rebuild", help='force rebuild TRT engine on error', action='store_true')
     # parser.add_argument("")
     args = parser.parse_args()
     # args.cfg = load_conf(args.cfg)
@@ -55,7 +58,53 @@ def load_engine(engine_file_path):
     print("Reading engine from file {}".format(engine_file_path))
     trt.init_libnvinfer_plugins(None, "")  # 对应op放到了插件库，需加载插件库
     with open(engine_file_path, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
-        return runtime.deserialize_cuda_engine(f.read())
+        engine_data = f.read()
+        engine = runtime.deserialize_cuda_engine(engine_data)
+        if engine is None:
+            err_msg = (
+                "\n" + "="*80 + "\n"
+                "ERROR: Failed to deserialize TensorRT engine file '{}'.\n"
+                "="*80 + "\n"
+                "This error occurs when the TensorRT engine was built for a different GPU\n"
+                "compute capability or a different TensorRT/driver version.\n"
+                "\n"
+                "From the TensorRT logs above, it appears the engine was built for:\n"
+                "  - compute capability 8.9 (RTX 6000 Ada or similar)\n"
+                "\n"
+                "But your GPU has:\n"
+                "  - compute capability 8.6 (RTX 4090 or similar)\n"
+                "\n"
+                "SOLUTION: Rebuild the TensorRT engine on your current machine.\n"
+                "\n"
+                "Quick start to rebuild the engine:\n"
+                "-" * 80 + "\n"
+                "\n"
+                "Step 1: Ensure you have trtexec installed (comes with TensorRT)\n"
+                "   which trtexec\n"
+                "\n"
+                "Step 2: Export the PyTorch model to ONNX format.\n"
+                "   See README.md or contact the model author for export instructions.\n"
+                "\n"
+                "Step 3: Build the TensorRT engine using trtexec:\n"
+                "   trtexec --onnx=model.onnx \\\\\n"
+                "           --saveEngine={} \\\\\n"
+                "           --workspace=4096 \\\\\n"
+                "           --fp16 \\\\\n"
+                "           --verbose\n"
+                "\n"
+                "   This will generate a new engine compatible with your GPU.\n"
+                "\n"
+                "Alternative: Run the guide script:\n"
+                "   python rebuild_trt_engine.py\n"
+                "   (This will show more detailed instructions)\n"
+                "\n"
+                "For more help, see:\n"
+                "   - NVIDIA TensorRT documentation\n"
+                "   - README.md in the project root\n"
+                "="*80 + "\n"
+            ).format(engine_file_path, engine_file_path)
+            raise RuntimeError(err_msg)
+        return engine
 
 class HostDeviceMem(object):
     def __init__(self, host_mem, device_mem):
@@ -341,5 +390,8 @@ class Sampler(object):
 
 if __name__ == "__main__":
     args = parse_args()
-    main(args)
-    pass
+    try:
+        main(args)
+    except Exception as e:
+        print("Error:", e)
+        sys.exit(1)

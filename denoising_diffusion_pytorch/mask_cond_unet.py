@@ -455,9 +455,59 @@ class BlockFFT(nn.Module):
 
     def forward(self, x, scale_shift = None):
         B, C, H, W = x.shape
-        x = torch.fft.rfft2(x, dim=(2, 3), norm='ortho')
-        x = x * torch.view_as_complex(self.complex_weight)
-        x = torch.fft.irfft2(x, s=(H, W), dim=(2, 3), norm='ortho')
+
+        ### modified by AI###
+        # Pad to nearest power of 2 to support cuFFT in half precision
+        def next_power_of_2(n):
+            if n & (n - 1) == 0:
+                return n
+            power = 1
+            while power < n:
+                power <<= 1
+            return power
+        
+        H_padded = next_power_of_2(H)
+        W_padded = next_power_of_2(W)
+        
+        # Pad if necessary
+        if H != H_padded or W != W_padded:
+            pad_h = H_padded - H
+            pad_w = W_padded - W
+            x = torch.nn.functional.pad(x, (0, pad_w, 0, pad_h), mode='constant', value=0)
+
+        # FFT to frequency domain
+        x_freq = torch.fft.rfft2(x, dim=(2, 3), norm='ortho')
+
+        # Align complex_weight with current frequency shape (crop or pad)
+        wt = self.complex_weight  # shape: (dim, h_wt, wf, 2)
+        h_wt = wt.shape[1]
+        wf = wt.shape[2]
+        Hf = x_freq.shape[2]
+        Wf = x_freq.shape[3]
+
+        if h_wt != Hf or wf != Wf:
+            device = wt.device
+            dtype = wt.dtype
+            new_wt = torch.zeros((wt.shape[0], Hf, Wf, 2), device=device, dtype=dtype)
+            h_min = min(h_wt, Hf)
+            w_min = min(wf, Wf)
+            new_wt[:, :h_min, :w_min, :] = wt[:, :h_min, :w_min, :]
+            wt_use = new_wt
+        else:
+            wt_use = wt
+
+        weight_complex = torch.view_as_complex(wt_use).to(x_freq.dtype)
+        x_freq = x_freq * weight_complex.unsqueeze(0)
+
+        # Inverse FFT and crop back
+        x = torch.fft.irfft2(x_freq, s=(H_padded, W_padded), dim=(2, 3), norm='ortho')
+
+        ### modified by AI###
+        
+        # Crop back to original size        
+        if H != H_padded or W != W_padded:
+            x = x[:, :, :H, :W]
+        
         x = x.reshape(B, C, H, W)
 
         return x

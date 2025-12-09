@@ -31,7 +31,7 @@ model:
     ddconfig:
       double_z: True
       z_channels: 3
-      resolution: [ 320, 320 ]
+      resolution: [256, 256] #[320, 320]
       in_channels: 1
       out_ch: 1
       ch: 128
@@ -39,15 +39,15 @@ model:
       num_res_blocks: 2
       attn_resolutions: [ ]
       dropout: 0.0
-    ckpt_path: './checkpoints/first_stage_total_320.pt' # the weight is obtained by training the first stage model
+    ckpt_path: './data/total_edges/results_ae_kl_256x256/model-15.pt' # the weight is obtained by training the first stage model
 
   unet:
-    dim: 128
+    dim: 64 #128
     cond_net: swin
     fix_bb: False
     channels: 3
     out_mul: 1
-    dim_mults: [ 1, 2, 4, 4, ] # num_down = len(dim_mults)
+    dim_mults: [ 1, 2, 2, 2, ] #[ 1, 2, 4, 4, ] # num_down = len(dim_mults)
     cond_in_dim: 3
     cond_dim: 128
     cond_dim_mults: [ 2, 4 ] # num_down = len(cond_dim_mults)
@@ -62,22 +62,22 @@ model:
 data:
   name: edge
   crop_type: rand_resize_crop
-  img_folder: '/data/yeyunfan/edge_detection_datasets/datasets/BSDS_100%'
+  img_folder: './data/edge_detection_datasets' #'/data/yeyunfan/edge_detection_datasets/datasets/BSDS_100%'
   augment_horizontal_flip: True
-  batch_size: 2
+  batch_size: 1 #8
   num_workers: 8
 
 trainer:
-  gradient_accumulate_every: 8
+  gradient_accumulate_every: 2 #8
   lr: !!float 5e-5
   min_lr: !!float 5e-6
-  train_num_steps: 100000
-  save_and_sample_every: 5000
+  train_num_steps: 10000 #100000
+  save_and_sample_every: 500 #5000
   enable_resume: False
-  log_freq: 1000
-  results_folder: "./training/BSDS_swin_unet12_disloss_bs2x8"
-  amp: False
-  fp16: False
+  log_freq: 100 #1000
+  results_folder: './outputs/disloss' #"./training/BSDS_swin_unet12_disloss_bs2x8"
+  amp: True #False
+  fp16: True #False
   resume_milestone: 0
   test_before: True
   ema_update_after_step: 10000

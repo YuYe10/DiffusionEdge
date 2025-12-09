@@ -836,7 +836,24 @@ class LatentDiffusion(DDPM):
         mask[label == 0] = beta * num_positive / (num_positive + num_negative)
 
         # mask[label == 2] = 0
-        cost = F.binary_cross_entropy(prediction, labelf, weight=mask, reduction='none')
+        # binary_cross_entropy / BCELoss are unsafe to autocast (half precision).
+        # Run this operation with autocast disabled to avoid runtime errors when AMP is enabled.
+        ### modified by AI###
+        from contextlib import nullcontext
+        # prefer torch.cuda.amp.autocast when available; otherwise use a no-op context
+        if hasattr(torch, 'cuda') and hasattr(torch.cuda, 'amp') and hasattr(torch.cuda.amp, 'autocast'):
+            ctx = torch.cuda.amp.autocast(enabled=False)
+        else:
+            ctx = nullcontext()
+
+        with ctx:
+            # ensure target and weight have same dtype/device as prediction
+            pred_dtype = prediction.dtype
+            pred_device = prediction.device
+            labelf_t = labelf.to(device=pred_device, dtype=pred_dtype)
+            mask_t = mask.to(device=pred_device, dtype=pred_dtype)
+            cost = F.binary_cross_entropy(prediction, labelf_t, weight=mask_t, reduction='none')
+        ### modified by AI###
         return cost.mean([1, 2, 3])
 
     @torch.no_grad()

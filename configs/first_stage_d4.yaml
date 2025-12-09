@@ -31,6 +31,6 @@ trainer:
   train_num_steps: 150000
   save_and_sample_every: 10000
   log_freq: 100
-  results_folder: './data/total_edges/results_ae_kl_320x320_d4'
+  results_folder: './data/total_edges/results_ae_kl_256x256'
   amp: True #False
   fp16: True #False
