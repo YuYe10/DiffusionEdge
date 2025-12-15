@@ -4,3 +4,4 @@ outputs/
 pre_weight/
 */__pycache__/
 */modules/
+.venv/
